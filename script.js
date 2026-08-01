@@ -59,32 +59,29 @@ var Auth = {
 // ============================================================
 // API — Appwrite REST
 // ============================================================
-req: async function(method, path, body) {
-    var opts = {
-        method: method,
-        headers: Auth.headers(),
-        credentials: 'include'
-    };
-    if (body) opts.body = JSON.stringify(body);
+create: async function(item) {
+    // 1. Get current document data
+    var docData = localToDoc(item);
     
-    var res = await fetch(AW.ENDPOINT + path, opts);
-
-    if (!res.ok) {
-        var errData;
-        try { errData = await res.json(); } catch { errData = { message: res.statusText }; }
-        
-        // 🔴 THIS LOG WILL PRINT THE EXACT REASON FOR 400:
-        console.error("APPWRITE ERROR DETAILS:", errData);
-        
-        if (res.status === 401) {
-            Auth.clear();
-            showLogin();
-            throw new Error('Session expired');
-        }
-        throw new Error(errData.message || res.statusText);
+    // 2. Ensure userId is populated from current Auth session
+    if (Auth.user && Auth.user.$id) {
+        docData.userId = Auth.user.$id;
     }
-    var txt = await res.text();
-    return txt ? JSON.parse(txt) : null;
+
+    // 3. Generate a client ID or use 'unique()'
+    var generatedId = 'doc_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+
+    var body = {
+        documentId: generatedId,
+        data: docData
+    };
+
+    var url = '/databases/' + AW.DATABASE_ID
+            + '/collections/' + AW.COLLECTION_ID
+            + '/documents';
+
+    var res = await this.req('POST', url, body);
+    return docToLocal(res);
 },
 
     // ---- Auth ----
