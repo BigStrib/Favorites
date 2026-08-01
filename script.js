@@ -1,168 +1,103 @@
 // ============================================================
 // APPWRITE CONFIG
 // ============================================================
-var AW = {
-    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',
-    PROJECT_ID: '6a6dd3c900350363b8e7',
-    DATABASE_ID: '6a6dd4fb001f662f0f79',
-    COLLECTION_ID: 'bookmarks'
-};
+var AW_ENDPOINT = 'https://sfo.cloud.appwrite.io/v1';
+var AW_PROJECT = '6a6dd3c900350363b8e7';
+var AW_DB = '6a6dd4fb001f662f0f79';
+var AW_COL = 'bookmarks';
 
 // ============================================================
-// SESSION MANAGER — stores session secret for REST API auth
+// APPWRITE SDK LOADER — loads official SDK from CDN
 // ============================================================
-var Session = {
-    secret: null,
-    userId: null,
-
-    save: function(secret, userId) {
-        this.secret = secret;
-        this.userId = userId;
-        try {
-            localStorage.setItem('aw_secret', secret);
-            localStorage.setItem('aw_userId', userId);
-        } catch (e) {}
-    },
-
-    load: function() {
-        try {
-            this.secret = localStorage.getItem('aw_secret');
-            this.userId = localStorage.getItem('aw_userId');
-        } catch (e) {}
-        return !!(this.secret && this.userId);
-    },
-
-    clear: function() {
-        this.secret = null;
-        this.userId = null;
-        try {
-            localStorage.removeItem('aw_secret');
-            localStorage.removeItem('aw_userId');
-        } catch (e) {}
-    }
-};
+function loadAppwriteSDK() {
+    return new Promise(function(resolve, reject) {
+        if (window.Appwrite) { resolve(); return; }
+        var script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/appwrite@15.0.0/dist/appwrite.min.js';
+        script.onload = resolve;
+        script.onerror = function() { reject(new Error('Failed to load Appwrite SDK')); };
+        document.head.appendChild(script);
+    });
+}
 
 // ============================================================
-// HTTP helper — all Appwrite REST calls go through here
+// APPWRITE CLIENT — initialized after SDK loads
 // ============================================================
-async function awFetch(method, path, body) {
-    var headers = {
-        'X-Appwrite-Project': AW.PROJECT_ID,
-        'Content-Type': 'application/json'
-    };
+var client = null;
+var account = null;
+var databases = null;
+var currentUser = null;
 
-    // Attach session token if we have one
-    if (Session.secret) {
-        headers['X-Appwrite-Session'] = Session.secret;
-    }
+function initAppwrite() {
+    var sdk = window.Appwrite;
+    client = new sdk.Client();
+    client.setEndpoint(AW_ENDPOINT).setProject(AW_PROJECT);
+    account = new sdk.Account(client);
+    databases = new sdk.Databases(client);
+}
 
-    var opts = {
-        method: method,
-        headers: headers
-    };
+// ============================================================
+// AUTH FUNCTIONS
+// ============================================================
+async function doLogin(email, password) {
+    await account.createEmailPasswordSession(email, password);
+    currentUser = await account.get();
+    return currentUser;
+}
 
-    if (body !== undefined && body !== null) {
-        opts.body = JSON.stringify(body);
-    }
-
-    var url = AW.ENDPOINT + path;
-    var res;
-
+async function checkSession() {
     try {
-        res = await fetch(url, opts);
+        currentUser = await account.get();
+        return true;
     } catch (e) {
-        throw new Error('Network error');
+        currentUser = null;
+        return false;
     }
-
-    // Read response body
-    var text = '';
-    try { text = await res.text(); } catch (e) {}
-
-    var data = null;
-    if (text) {
-        try { data = JSON.parse(text); } catch (e) {}
-    }
-
-    if (!res.ok) {
-        if (res.status === 401) {
-            Session.clear();
-            showLogin();
-            throw new Error('Session expired — please sign in again');
-        }
-        var errMsg = (data && data.message) ? data.message : ('Error ' + res.status);
-        throw new Error(errMsg);
-    }
-
-    return data;
 }
 
-// ============================================================
-// AUTH API
-// ============================================================
-async function apiLogin(email, password) {
-    // Create session
-    var session = await awFetch('POST', '/account/sessions/email', {
-        email: email,
-        password: password
-    });
-    return session;
-}
-
-async function apiGetAccount() {
-    var user = await awFetch('GET', '/account');
-    return user;
-}
-
-async function apiLogout() {
+async function doLogout() {
     try {
-        await awFetch('DELETE', '/account/sessions/current');
+        await account.deleteSession('current');
     } catch (e) {}
+    currentUser = null;
 }
 
 // ============================================================
-// DATABASE API
+// DATABASE FUNCTIONS
 // ============================================================
-async function apiGetAll() {
-    if (!Session.userId) return [];
+async function dbGetAll() {
+    if (!currentUser) return [];
+    var sdk = window.Appwrite;
+    var docs = [];
+    var offset = 0;
+    var batchSize = 100;
+    var keepGoing = true;
 
-    var queries = [
-        'equal("userId",["' + Session.userId + '"])',
-        'limit(500)',
-        'orderAsc("order")'
-    ];
+    while (keepGoing) {
+        var res = await databases.listDocuments(AW_DB, AW_COL, [
+            sdk.Query.equal('userId', [currentUser.$id]),
+            sdk.Query.orderAsc('order'),
+            sdk.Query.limit(batchSize),
+            sdk.Query.offset(offset)
+        ]);
+        docs = docs.concat(res.documents);
+        offset += batchSize;
+        if (res.documents.length < batchSize) keepGoing = false;
+    }
 
-    var qs = queries.map(function(q) {
-        return 'queries[]=' + encodeURIComponent(q);
-    }).join('&');
-
-    var path = '/databases/' + AW.DATABASE_ID
-             + '/collections/' + AW.COLLECTION_ID
-             + '/documents?' + qs;
-
-    var res = await awFetch('GET', path);
-    if (!res || !res.documents) return [];
-    return res.documents.map(docToLocal);
+    return docs.map(docToLocal);
 }
 
-async function apiCreate(item) {
-    var docData = localToDoc(item);
-    docData.userId = Session.userId || '';
-
-    var docId = 'bk' + Date.now().toString(36) + Math.random().toString(36).substr(2, 8);
-
-    var path = '/databases/' + AW.DATABASE_ID
-             + '/collections/' + AW.COLLECTION_ID
-             + '/documents';
-
-    var res = await awFetch('POST', path, {
-        documentId: docId,
-        data: docData
-    });
-
+async function dbCreate(item) {
+    var sdk = window.Appwrite;
+    var data = localToDoc(item);
+    data.userId = currentUser ? currentUser.$id : '';
+    var docId = sdk.ID.unique();
+    var res = await databases.createDocument(AW_DB, AW_COL, docId, data);
     return docToLocal(res);
 }
 
-async function apiUpdate(id, fields) {
+async function dbUpdate(id, fields) {
     var patchData = {};
     if (fields.name !== undefined) patchData.name = fields.name;
     if (fields.url !== undefined) patchData.url = fields.url;
@@ -172,31 +107,22 @@ async function apiUpdate(id, fields) {
     if (fields.parentId !== undefined) {
         patchData.parentId = (fields.parentId === null) ? '' : fields.parentId;
     }
-
-    var path = '/databases/' + AW.DATABASE_ID
-             + '/collections/' + AW.COLLECTION_ID
-             + '/documents/' + id;
-
-    var res = await awFetch('PATCH', path, { data: patchData });
+    var res = await databases.updateDocument(AW_DB, AW_COL, id, patchData);
     return docToLocal(res);
 }
 
-async function apiDeleteDoc(id) {
-    var path = '/databases/' + AW.DATABASE_ID
-             + '/collections/' + AW.COLLECTION_ID
-             + '/documents/' + id;
-    await awFetch('DELETE', path);
+async function dbDelete(id) {
+    await databases.deleteDocument(AW_DB, AW_COL, id);
 }
 
-async function apiBatchUpdate(updates) {
-    // Run in small parallel chunks since Appwrite has no batch endpoint
-    var size = 6;
-    for (var i = 0; i < updates.length; i += size) {
-        var chunk = updates.slice(i, i + size);
+async function dbBatchUpdate(updates) {
+    var chunkSize = 6;
+    for (var i = 0; i < updates.length; i += chunkSize) {
+        var chunk = updates.slice(i, i + chunkSize);
         await Promise.all(chunk.map(function(u) {
             var d = { order: u.order };
             if (u.parentId !== undefined) d.parentId = u.parentId;
-            return apiUpdate(u.id, d);
+            return dbUpdate(u.id, d);
         }));
     }
 }
@@ -225,7 +151,7 @@ function localToDoc(item) {
         parentId: (item.parentId !== null && item.parentId !== undefined) ? item.parentId : '',
         order: item.order || 0,
         expanded: item.expanded !== false,
-        userId: Session.userId || ''
+        userId: (currentUser && currentUser.$id) ? currentUser.$id : ''
     };
 }
 
@@ -298,7 +224,7 @@ var confirmResolve = null;
 var appBound = false;
 
 // ============================================================
-// DOM REFS (set after DOMContentLoaded)
+// DOM REFS
 // ============================================================
 var loginPage, appEl, treeEl, emptyEl, searchInput, clearBtn;
 var modalEl, moveModalEl, ctxMenu, dropZone, rootDrop, toastEl;
@@ -324,36 +250,33 @@ function cacheDom() {
 }
 
 // ============================================================
-// BOOT — runs once DOM is ready
+// BOOT
 // ============================================================
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     cacheDom();
-    bindLogin();
-    tryAutoLogin();
-});
 
-async function tryAutoLogin() {
-    if (!Session.load()) {
-        showLogin();
+    // Show loading state
+    loginPage.classList.remove('hidden');
+    appEl.classList.add('hidden');
+
+    try {
+        await loadAppwriteSDK();
+        initAppwrite();
+    } catch (e) {
+        notify('Failed to load — please refresh');
         return;
     }
 
-    // We have a stored secret — verify it still works
-    try {
-        var user = await apiGetAccount();
-        if (user && user.$id) {
-            Session.userId = user.$id;
-            localStorage.setItem('aw_userId', user.$id);
-            await enterApp();
-        } else {
-            Session.clear();
-            showLogin();
-        }
-    } catch (e) {
-        Session.clear();
+    bindLogin();
+
+    // Check for existing session
+    var hasSession = await checkSession();
+    if (hasSession) {
+        await enterApp();
+    } else {
         showLogin();
     }
-}
+});
 
 // ============================================================
 // PAGE SWITCHING
@@ -372,7 +295,7 @@ async function enterApp() {
     appEl.classList.remove('hidden');
 
     try {
-        bookmarks = await apiGetAll();
+        bookmarks = await dbGetAll();
     } catch (e) {
         bookmarks = [];
         notify('Failed to load bookmarks');
@@ -421,34 +344,21 @@ function bindLogin() {
         errEl.classList.remove('show');
 
         try {
-            // Step 1: Create session
-            var session = await apiLogin(email, password);
-
-            if (!session || !session.$id) {
-                throw new Error('No session returned');
-            }
-
-            // Save the session secret — this is the key for REST auth
-            var secret = session.secret || session.providerAccessToken || '';
-            Session.save(secret, session.userId || '');
-
-            // Step 2: Get user account to confirm + get userId
-            var user = await apiGetAccount();
-            if (user && user.$id) {
-                Session.userId = user.$id;
-                localStorage.setItem('aw_userId', user.$id);
-            }
-
-            // Step 3: Enter app
+            await doLogin(email, password);
             form.reset();
             errEl.classList.remove('show');
             await enterApp();
-
         } catch (err) {
-            Session.clear();
             var msg = 'Invalid email or password';
-            if (err.message && err.message.indexOf('<!') === -1 && err.message !== 'No session returned') {
-                msg = err.message;
+            if (err && err.message) {
+                var m = err.message;
+                if (m.indexOf('Invalid credentials') !== -1 || m.indexOf('Invalid email') !== -1) {
+                    msg = 'Invalid email or password';
+                } else if (m.indexOf('Rate limit') !== -1) {
+                    msg = 'Too many attempts — please wait';
+                } else if (m.indexOf('<!') === -1) {
+                    msg = m;
+                }
             }
             errEl.textContent = msg;
             errEl.classList.add('show');
@@ -463,7 +373,7 @@ function bindLogin() {
 }
 
 // ============================================================
-// CUSTOM CONFIRM DIALOG
+// CUSTOM CONFIRM
 // ============================================================
 function customConfirm(title, message, actionLabel) {
     return new Promise(function(resolve) {
@@ -485,7 +395,7 @@ function closeConfirm(result) {
 }
 
 // ============================================================
-// RENDER TREE
+// RENDER
 // ============================================================
 function getChildren(pid) {
     return bookmarks
@@ -534,11 +444,8 @@ function mkNode(item, q) {
 
     if (isFolder) {
         var open = item.expanded !== false;
-        h += '<button class="node-toggle ' + (open ? 'open' : '') + '" data-id="' + item.id + '">'
-           + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">'
-           + '<polyline points="9 18 15 12 9 6"/></svg></button>';
-        h += '<span class="node-icon folder-ic"><svg viewBox="0 0 24 24" fill="currentColor">'
-           + '<path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg></span>';
+        h += '<button class="node-toggle ' + (open ? 'open' : '') + '" data-id="' + item.id + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>';
+        h += '<span class="node-icon folder-ic"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg></span>';
         h += '<span class="node-info"><span class="node-name">' + hlText(item.name, q) + '</span></span>';
         h += '<span class="node-count">' + kids.length + '</span>';
     } else {
@@ -547,19 +454,12 @@ function mkNode(item, q) {
             ? '<img src="' + fav + '" alt="" onerror="this.outerHTML=\'<svg viewBox=\\\'0 0 24 24\\\' fill=\\\'none\\\' stroke=\\\'currentColor\\\' stroke-width=\\\'2\\\'><path d=\\\'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\\\'/></svg>\'">'
             : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
         h += '<span class="node-icon">' + ic + '</span>';
-        h += '<span class="node-info"><span class="node-name">' + hlText(item.name, q) + '</span>'
-           + '<span class="node-url-text">' + hlText(displayUrl(item.url), q) + '</span></span>';
+        h += '<span class="node-info"><span class="node-name">' + hlText(item.name, q) + '</span><span class="node-url-text">' + hlText(displayUrl(item.url), q) + '</span></span>';
     }
 
     h += '<span class="node-actions">'
-       + '<button class="act" data-act="edit" data-id="' + item.id + '" title="Edit">'
-       + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-       + '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>'
-       + '<path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'
-       + '<button class="act del" data-act="delete" data-id="' + item.id + '" title="Delete">'
-       + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-       + '<polyline points="3 6 5 6 21 6"/>'
-       + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
+       + '<button class="act" data-act="edit" data-id="' + item.id + '" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'
+       + '<button class="act del" data-act="delete" data-id="' + item.id + '" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
        + '</span>';
 
     row.innerHTML = h;
@@ -578,7 +478,7 @@ function mkNode(item, q) {
 }
 
 // ============================================================
-// BIND APP EVENTS (called once after login)
+// BIND APP EVENTS
 // ============================================================
 function bindApp() {
     if (appBound) return;
@@ -598,13 +498,11 @@ function bindApp() {
     $('#addBtn').addEventListener('click', function() { openModal('bookmark'); });
     $('#addFolderBtn').addEventListener('click', function() { openModal('folder'); });
 
-    // Logout
     $('#logoutBtn').addEventListener('click', function() { logoutModalEl.classList.add('on'); });
     $('#logoutNo').addEventListener('click', function() { logoutModalEl.classList.remove('on'); });
     $('#logoutYes').addEventListener('click', async function() {
         logoutModalEl.classList.remove('on');
-        await apiLogout();
-        Session.clear();
+        await doLogout();
         bookmarks = [];
         treeEl.innerHTML = '';
         appBound = false;
@@ -615,20 +513,17 @@ function bindApp() {
         if (e.target === logoutModalEl) logoutModalEl.classList.remove('on');
     });
 
-    // Modal
     $('#modalClose').addEventListener('click', closeModal);
     $('#cancelBtn').addEventListener('click', closeModal);
     modalEl.addEventListener('click', function(e) { if (e.target === modalEl) closeModal(); });
     $('#itemForm').addEventListener('submit', onSubmit);
 
-    // Confirm
     $('#confirmNo').addEventListener('click', function() { closeConfirm(false); });
     $('#confirmYes').addEventListener('click', function() { closeConfirm(true); });
     confirmModalEl.addEventListener('click', function(e) {
         if (e.target === confirmModalEl) closeConfirm(false);
     });
 
-    // Tree
     treeEl.addEventListener('click', onTreeClick);
     treeEl.addEventListener('contextmenu', onCtxMenu);
     ctxMenu.querySelectorAll('button').forEach(function(b) {
@@ -638,23 +533,19 @@ function bindApp() {
         if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('on');
     });
 
-    // Move modal
     $('#moveClose').addEventListener('click', function() { moveModalEl.classList.remove('on'); });
     moveModalEl.addEventListener('click', function(e) {
         if (e.target === moveModalEl) moveModalEl.classList.remove('on');
     });
 
-    // Mouse drag
     treeEl.addEventListener('mousedown', onPointerDown);
     document.addEventListener('mousemove', onPointerMove);
     document.addEventListener('mouseup', onPointerUp);
 
-    // Touch drag
     treeEl.addEventListener('touchstart', onTouchStart, { passive: false });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     document.addEventListener('touchend', onTouchEnd);
 
-    // External drag-and-drop
     var extC = 0;
     document.addEventListener('dragenter', function(e) {
         if (dragState.active || appEl.classList.contains('hidden')) return;
@@ -679,7 +570,6 @@ function bindApp() {
     });
     document.addEventListener('drop', onExternalDrop);
 
-    // Escape key
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closeModal();
@@ -692,7 +582,7 @@ function bindApp() {
 }
 
 // ============================================================
-// TREE CLICK HANDLER
+// TREE CLICKS
 // ============================================================
 function onTreeClick(e) {
     var tog = e.target.closest('.node-toggle');
@@ -720,7 +610,7 @@ async function toggleFolder(id) {
     var item = bookmarks.find(function(i) { return sid(i.id) === id; });
     if (!item) return;
     item.expanded = !item.expanded;
-    try { await apiUpdate(item.id, { expanded: item.expanded }); } catch (e) {}
+    try { await dbUpdate(item.id, { expanded: item.expanded }); } catch (e) {}
     var li = treeEl.querySelector('.node[data-id="' + id + '"]');
     if (li) {
         var t = li.querySelector('.node-toggle');
@@ -731,7 +621,7 @@ async function toggleFolder(id) {
 }
 
 // ============================================================
-// ADD / EDIT MODAL
+// MODAL
 // ============================================================
 function openModal(type, editId) {
     var form = $('#itemForm');
@@ -770,7 +660,6 @@ function populateParentSelect(excl) {
     var folders = bookmarks.filter(function(i) {
         return i.type === 'folder' && sid(i.id) !== sid(excl);
     });
-
     function addOpts(pid, depth) {
         folders.filter(function(f) { return pidMatch(f.parentId, pid); }).forEach(function(f) {
             var o = document.createElement('option');
@@ -796,7 +685,7 @@ async function onSubmit(e) {
 
     try {
         if (id) {
-            await apiUpdate(id, { name: name, url: url, parentId: parentId });
+            await dbUpdate(id, { name: name, url: url, parentId: parentId });
             var idx = bookmarks.findIndex(function(i) { return sid(i.id) === sid(id); });
             if (idx >= 0) {
                 bookmarks[idx].name = name;
@@ -805,19 +694,15 @@ async function onSubmit(e) {
             }
             notify('Updated');
         } else {
-            var created = await apiCreate({
-                type: type,
-                name: name,
-                url: url,
-                parentId: parentId,
-                order: bookmarks.length,
-                expanded: true
+            var created = await dbCreate({
+                type: type, name: name, url: url, parentId: parentId,
+                order: bookmarks.length, expanded: true
             });
             bookmarks.push(created);
             notify(type === 'folder' ? 'Folder created' : 'Bookmark saved');
         }
     } catch (err) {
-        notify('Error: ' + err.message);
+        notify('Error: ' + (err.message || err));
         return;
     }
 
@@ -847,22 +732,18 @@ async function delItem(id) {
         var toDelete = [];
         function collect(pid) {
             toDelete.push(pid);
-            bookmarks.filter(function(i) { return pidMatch(i.parentId, pid); }).forEach(function(c) {
-                collect(c.id);
-            });
+            bookmarks.filter(function(i) { return pidMatch(i.parentId, pid); }).forEach(function(c) { collect(c.id); });
         }
         collect(item.id);
 
         for (var d = 0; d < toDelete.length; d++) {
-            await apiDeleteDoc(toDelete[d]);
+            await dbDelete(toDelete[d]);
         }
 
-        bookmarks = bookmarks.filter(function(i) {
-            return toDelete.indexOf(i.id) === -1;
-        });
+        bookmarks = bookmarks.filter(function(i) { return toDelete.indexOf(i.id) === -1; });
         notify('Deleted');
         render(searchInput.value);
-    } catch (err) { notify('Error: ' + err.message); }
+    } catch (err) { notify('Error: ' + (err.message || err)); }
 }
 
 // ============================================================
@@ -917,10 +798,7 @@ function openMoveModal(id) {
     function addFolders(pid, depth) {
         bookmarks
             .filter(function(f) {
-                return f.type === 'folder'
-                    && pidMatch(f.parentId, pid)
-                    && sid(f.id) !== id
-                    && desc.indexOf(sid(f.id)) === -1;
+                return f.type === 'folder' && pidMatch(f.parentId, pid) && sid(f.id) !== id && desc.indexOf(sid(f.id)) === -1;
             })
             .sort(function(a, b) { return (a.order || 0) - (b.order || 0); })
             .forEach(function(f) {
@@ -952,13 +830,13 @@ async function moveItemTo(id, newPid) {
 
     try {
         var newOrder = bookmarks.filter(function(i) { return pidMatch(i.parentId, newPid); }).length;
-        await apiUpdate(id, { parentId: newPid, order: newOrder });
+        await dbUpdate(id, { parentId: newPid, order: newOrder });
         item.parentId = newPid;
         reorderSibs(newPid);
         moveModalEl.classList.remove('on');
         notify('Moved');
         render(searchInput.value);
-    } catch (err) { notify('Error: ' + err.message); }
+    } catch (err) { notify('Error: ' + (err.message || err)); }
 }
 
 function reorderSibs(pid) {
@@ -969,7 +847,7 @@ function reorderSibs(pid) {
 }
 
 // ============================================================
-// DRAG & DROP ENGINE
+// DRAG & DROP
 // ============================================================
 var DRAG_THRESHOLD = 8;
 var LONG_PRESS_MS = 400;
@@ -994,18 +872,14 @@ function getDropTarget(x, y) {
     if (dragState.ghostEl) dragState.ghostEl.style.display = 'none';
     var el = document.elementFromPoint(x, y);
     if (dragState.ghostEl) dragState.ghostEl.style.display = '';
-
     if (!el) return null;
     if (el.closest('#rootDrop')) return { type: 'root' };
-
     var row = el.closest('.node-row');
     if (!row || row.dataset.id === dragState.id) return null;
-
     var rect = row.getBoundingClientRect();
     var yPos = y - rect.top;
     var h = rect.height;
     var isFolder = row.dataset.type === 'folder';
-
     if (isFolder) {
         if (yPos < h * 0.25) return { type: 'before', id: row.dataset.id, row: row };
         if (yPos > h * 0.75) return { type: 'after', id: row.dataset.id, row: row };
@@ -1021,15 +895,12 @@ function showDropIndicator(target) {
     var srcRow = treeEl.querySelector('.node-row[data-id="' + dragState.id + '"]');
     if (srcRow) srcRow.classList.add('dragging');
     if (!target) return;
-
     if (target.type === 'root') { rootDrop.classList.add('drag-hover'); return; }
     if (target.type === 'inside') { target.row.classList.add('drag-over-folder'); return; }
-
     var bar = document.createElement('div');
     bar.className = 'drop-bar';
     var node = target.row.closest('.node');
     if (!node) return;
-
     if (target.type === 'before') node.parentNode.insertBefore(bar, node);
     else node.parentNode.insertBefore(bar, node.nextSibling);
 }
@@ -1045,13 +916,11 @@ async function executeDrop(target) {
             dragged.parentId = null;
             reorderSibs(null);
             reorderSibs(oldPid);
-            await apiUpdate(dragged.id, { parentId: null, order: dragged.order });
+            await dbUpdate(dragged.id, { parentId: null, order: dragged.order });
             notify('Moved to root');
-
         } else if (target.type === 'inside') {
             var folder = bookmarks.find(function(i) { return sid(i.id) === target.id; });
             if (!folder) return;
-
             if (dragged.type === 'folder') {
                 var cur = folder.id;
                 while (cur) {
@@ -1060,27 +929,21 @@ async function executeDrop(target) {
                     cur = par ? (par.parentId || null) : null;
                 }
             }
-
             var oldPid2 = dragged.parentId;
             dragged.parentId = folder.id;
             reorderSibs(folder.id);
             reorderSibs(oldPid2);
-
             if (!folder.expanded) {
                 folder.expanded = true;
-                try { await apiUpdate(folder.id, { expanded: true }); } catch (e) {}
+                try { await dbUpdate(folder.id, { expanded: true }); } catch (e) {}
             }
-
-            await apiUpdate(dragged.id, { parentId: folder.id, order: dragged.order });
+            await dbUpdate(dragged.id, { parentId: folder.id, order: dragged.order });
             notify('Moved to ' + folder.name);
-
         } else {
             var targetItem = bookmarks.find(function(i) { return sid(i.id) === target.id; });
             if (!targetItem) return;
-
             var oldPid3 = dragged.parentId;
             var newPid = targetItem.parentId || null;
-
             if (dragged.type === 'folder' && newPid) {
                 var check = newPid;
                 while (check) {
@@ -1089,32 +952,25 @@ async function executeDrop(target) {
                     check = pp ? (pp.parentId || null) : null;
                 }
             }
-
             dragged.parentId = newPid;
-
             var sibs = bookmarks
                 .filter(function(i) { return pidMatch(i.parentId, newPid) && sid(i.id) !== sid(dragged.id); })
                 .sort(function(a, b) { return (a.order || 0) - (b.order || 0); });
-
             var ti = sibs.findIndex(function(s) { return sid(s.id) === sid(targetItem.id); });
             var insertIdx = target.type === 'before' ? ti : ti + 1;
             sibs.splice(insertIdx, 0, dragged);
-
             var updates = sibs.map(function(s, idx) {
                 s.order = idx;
                 return { id: s.id, parentId: newPid, order: idx };
             });
-
             reorderSibs(oldPid3);
-            await apiBatchUpdate(updates);
+            await dbBatchUpdate(updates);
             notify('Reordered');
         }
-    } catch (err) { notify('Error: ' + err.message); }
-
+    } catch (err) { notify('Error: ' + (err.message || err)); }
     render(searchInput.value);
 }
 
-// ---- Mouse drag ----
 function onPointerDown(e) {
     if (e.button !== 0) return;
     var row = e.target.closest('.node-row');
@@ -1161,7 +1017,6 @@ function onPointerUp(e) {
     if (wasMoved) setTimeout(function() { dragState.moved = false; }, 50);
 }
 
-// ---- Touch drag ----
 function onTouchStart(e) {
     var row = e.target.closest('.node-row');
     if (!row || e.target.closest('.act,.node-toggle')) return;
@@ -1170,7 +1025,6 @@ function onTouchStart(e) {
     dragState.startY = touch.clientY;
     dragState.moved = false;
     dragState.active = false;
-
     var rowId = row.dataset.id;
     dragState.timer = setTimeout(function() {
         dragState.id = rowId;
@@ -1219,16 +1073,13 @@ function onTouchEnd(e) {
     setTimeout(function() { dragState.moved = false; }, 50);
 }
 
-// ---- External link drop ----
 async function onExternalDrop(e) {
     dropZone.classList.remove('active');
     if (dragState.active || appEl.classList.contains('hidden')) return;
-
     var uriList = e.dataTransfer.getData('text/uri-list');
     var plain = e.dataTransfer.getData('text/plain');
     var htmlData = e.dataTransfer.getData('text/html');
     var urls = [];
-
     if (htmlData) {
         var doc = new DOMParser().parseFromString(htmlData, 'text/html');
         doc.querySelectorAll('a[href]').forEach(function(a) {
@@ -1247,23 +1098,18 @@ async function onExternalDrop(e) {
     }
     if (!urls.length) return;
     e.preventDefault();
-
     try {
         for (var u = 0; u < urls.length; u++) {
             var entry = urls[u];
-            var created = await apiCreate({
-                type: 'bookmark',
-                name: entry.name || extractUrlName(entry.url),
-                url: entry.url,
-                parentId: null,
-                order: bookmarks.length,
-                expanded: true
+            var created = await dbCreate({
+                type: 'bookmark', name: entry.name || extractUrlName(entry.url),
+                url: entry.url, parentId: null, order: bookmarks.length, expanded: true
             });
             bookmarks.push(created);
         }
         notify(urls.length + ' bookmark' + (urls.length > 1 ? 's' : '') + ' saved');
         render(searchInput.value);
-    } catch (err) { notify('Error: ' + err.message); }
+    } catch (err) { notify('Error: ' + (err.message || err)); }
 }
 
 // ============================================================
