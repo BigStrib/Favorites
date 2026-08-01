@@ -9,197 +9,197 @@ var AW = {
 };
 
 // ============================================================
-// AUTH
+// SESSION MANAGER — stores session secret for REST API auth
 // ============================================================
-var Auth = {
-    session: null,
-    user: null,
+var Session = {
+    secret: null,
+    userId: null,
 
-    save: function(session, user) {
-        this.session = session;
-        this.user = user;
-        sessionStorage.setItem('aw_session', JSON.stringify(session));
-        sessionStorage.setItem('aw_user', JSON.stringify(user));
+    save: function(secret, userId) {
+        this.secret = secret;
+        this.userId = userId;
+        try {
+            localStorage.setItem('aw_secret', secret);
+            localStorage.setItem('aw_userId', userId);
+        } catch (e) {}
     },
 
     load: function() {
         try {
-            var s = sessionStorage.getItem('aw_session');
-            var u = sessionStorage.getItem('aw_user');
-            if (s) this.session = JSON.parse(s);
-            if (u) this.user = JSON.parse(u);
+            this.secret = localStorage.getItem('aw_secret');
+            this.userId = localStorage.getItem('aw_userId');
         } catch (e) {}
-        return !!(this.session);
+        return !!(this.secret && this.userId);
     },
 
     clear: function() {
-        this.session = null;
-        this.user = null;
-        sessionStorage.removeItem('aw_session');
-        sessionStorage.removeItem('aw_user');
-    },
-
-    headers: function() {
-        var h = {
-            'Content-Type': 'application/json',
-            'X-Appwrite-Project': AW.PROJECT_ID,
-            'X-Appwrite-Response-Format': '1.5.0'
-        };
-        if (this.session && this.session.secret) {
-            h['X-Appwrite-Session'] = this.session.secret;
-        }
-        return h;
-    }
-};
-
-// ============================================================
-// API — Appwrite REST (single clean object)
-// ============================================================
-var API = {
-
-    req: async function(method, path, body) {
-        var opts = {
-            method: method,
-            headers: Auth.headers(),
-            credentials: 'include'
-        };
-        if (body) opts.body = JSON.stringify(body);
-
-        var res;
+        this.secret = null;
+        this.userId = null;
         try {
-            res = await fetch(AW.ENDPOINT + path, opts);
-        } catch (networkErr) {
-            throw new Error('Network error: ' + networkErr.message);
-        }
-
-        if (res.status === 401) {
-            Auth.clear();
-            showLogin();
-            throw new Error('Session expired');
-        }
-
-        var responseText = await res.text();
-        var data = null;
-        if (responseText) {
-            try { data = JSON.parse(responseText); } catch (e) { data = null; }
-        }
-
-        if (!res.ok) {
-            var errMsg = (data && data.message) ? data.message : res.statusText;
-            throw new Error(errMsg);
-        }
-
-        return data;
-    },
-
-    // ---- Auth ----
-
-    login: async function(email, password) {
-        var session = await this.req('POST', '/account/sessions/email', {
-            email: email,
-            password: password
-        });
-        return session;
-    },
-
-    getAccount: async function() {
-        var user = await this.req('GET', '/account');
-        return user;
-    },
-
-    logout: async function() {
-        try {
-            await this.req('DELETE', '/account/sessions/current');
+            localStorage.removeItem('aw_secret');
+            localStorage.removeItem('aw_userId');
         } catch (e) {}
-    },
-
-    // ---- Database ----
-
-    getAll: async function() {
-        var userId = (Auth.user && Auth.user.$id) ? Auth.user.$id : '';
-        if (!userId) return [];
-
-        var queries = [
-            'equal("userId",["' + userId + '"])',
-            'limit(500)',
-            'orderAsc("order")'
-        ];
-
-        var queryString = queries.map(function(q) {
-            return 'queries[]=' + encodeURIComponent(q);
-        }).join('&');
-
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents?' + queryString;
-
-        var res = await this.req('GET', url);
-        if (!res || !res.documents) return [];
-        return res.documents.map(function(doc) { return docToLocal(doc); });
-    },
-
-    create: async function(item) {
-        var docData = localToDoc(item);
-
-        if (Auth.user && Auth.user.$id) {
-            docData.userId = Auth.user.$id;
-        }
-
-        // Generate valid Appwrite document ID: 1-36 chars, alphanumeric, hyphen, underscore
-        var generatedId = 'bk' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
-
-        var body = {
-            documentId: generatedId,
-            data: docData
-        };
-
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents';
-
-        var res = await this.req('POST', url, body);
-        return docToLocal(res);
-    },
-
-    update: async function(id, data) {
-        var patchData = {};
-        if (data.name !== undefined) patchData.name = data.name;
-        if (data.url !== undefined) patchData.url = data.url;
-        if (data.expanded !== undefined) patchData.expanded = data.expanded;
-        if (data.order !== undefined) patchData.order = data.order;
-        if (data.type !== undefined) patchData.type = data.type;
-        if (data.parentId !== undefined) {
-            patchData.parentId = (data.parentId === null || data.parentId === undefined) ? '' : data.parentId;
-        }
-
-        var body = { data: patchData };
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents/' + id;
-
-        var res = await this.req('PATCH', url, body);
-        return docToLocal(res);
-    },
-
-    deleteDoc: async function(id) {
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents/' + id;
-        await this.req('DELETE', url);
-    },
-
-    batchUpdate: async function(updates) {
-        var chunkSize = 8;
-        for (var i = 0; i < updates.length; i += chunkSize) {
-            var chunk = updates.slice(i, i + chunkSize);
-            await Promise.all(chunk.map(function(u) {
-                var d = { order: u.order };
-                if (u.parentId !== undefined) d.parentId = u.parentId;
-                return API.update(u.id, d);
-            }));
-        }
     }
 };
+
+// ============================================================
+// HTTP helper — all Appwrite REST calls go through here
+// ============================================================
+async function awFetch(method, path, body) {
+    var headers = {
+        'X-Appwrite-Project': AW.PROJECT_ID,
+        'Content-Type': 'application/json'
+    };
+
+    // Attach session token if we have one
+    if (Session.secret) {
+        headers['X-Appwrite-Session'] = Session.secret;
+    }
+
+    var opts = {
+        method: method,
+        headers: headers
+    };
+
+    if (body !== undefined && body !== null) {
+        opts.body = JSON.stringify(body);
+    }
+
+    var url = AW.ENDPOINT + path;
+    var res;
+
+    try {
+        res = await fetch(url, opts);
+    } catch (e) {
+        throw new Error('Network error');
+    }
+
+    // Read response body
+    var text = '';
+    try { text = await res.text(); } catch (e) {}
+
+    var data = null;
+    if (text) {
+        try { data = JSON.parse(text); } catch (e) {}
+    }
+
+    if (!res.ok) {
+        if (res.status === 401) {
+            Session.clear();
+            showLogin();
+            throw new Error('Session expired — please sign in again');
+        }
+        var errMsg = (data && data.message) ? data.message : ('Error ' + res.status);
+        throw new Error(errMsg);
+    }
+
+    return data;
+}
+
+// ============================================================
+// AUTH API
+// ============================================================
+async function apiLogin(email, password) {
+    // Create session
+    var session = await awFetch('POST', '/account/sessions/email', {
+        email: email,
+        password: password
+    });
+    return session;
+}
+
+async function apiGetAccount() {
+    var user = await awFetch('GET', '/account');
+    return user;
+}
+
+async function apiLogout() {
+    try {
+        await awFetch('DELETE', '/account/sessions/current');
+    } catch (e) {}
+}
+
+// ============================================================
+// DATABASE API
+// ============================================================
+async function apiGetAll() {
+    if (!Session.userId) return [];
+
+    var queries = [
+        'equal("userId",["' + Session.userId + '"])',
+        'limit(500)',
+        'orderAsc("order")'
+    ];
+
+    var qs = queries.map(function(q) {
+        return 'queries[]=' + encodeURIComponent(q);
+    }).join('&');
+
+    var path = '/databases/' + AW.DATABASE_ID
+             + '/collections/' + AW.COLLECTION_ID
+             + '/documents?' + qs;
+
+    var res = await awFetch('GET', path);
+    if (!res || !res.documents) return [];
+    return res.documents.map(docToLocal);
+}
+
+async function apiCreate(item) {
+    var docData = localToDoc(item);
+    docData.userId = Session.userId || '';
+
+    var docId = 'bk' + Date.now().toString(36) + Math.random().toString(36).substr(2, 8);
+
+    var path = '/databases/' + AW.DATABASE_ID
+             + '/collections/' + AW.COLLECTION_ID
+             + '/documents';
+
+    var res = await awFetch('POST', path, {
+        documentId: docId,
+        data: docData
+    });
+
+    return docToLocal(res);
+}
+
+async function apiUpdate(id, fields) {
+    var patchData = {};
+    if (fields.name !== undefined) patchData.name = fields.name;
+    if (fields.url !== undefined) patchData.url = fields.url;
+    if (fields.expanded !== undefined) patchData.expanded = fields.expanded;
+    if (fields.order !== undefined) patchData.order = fields.order;
+    if (fields.type !== undefined) patchData.type = fields.type;
+    if (fields.parentId !== undefined) {
+        patchData.parentId = (fields.parentId === null) ? '' : fields.parentId;
+    }
+
+    var path = '/databases/' + AW.DATABASE_ID
+             + '/collections/' + AW.COLLECTION_ID
+             + '/documents/' + id;
+
+    var res = await awFetch('PATCH', path, { data: patchData });
+    return docToLocal(res);
+}
+
+async function apiDeleteDoc(id) {
+    var path = '/databases/' + AW.DATABASE_ID
+             + '/collections/' + AW.COLLECTION_ID
+             + '/documents/' + id;
+    await awFetch('DELETE', path);
+}
+
+async function apiBatchUpdate(updates) {
+    // Run in small parallel chunks since Appwrite has no batch endpoint
+    var size = 6;
+    for (var i = 0; i < updates.length; i += size) {
+        var chunk = updates.slice(i, i + size);
+        await Promise.all(chunk.map(function(u) {
+            var d = { order: u.order };
+            if (u.parentId !== undefined) d.parentId = u.parentId;
+            return apiUpdate(u.id, d);
+        }));
+    }
+}
 
 // ============================================================
 // DATA CONVERTERS
@@ -222,10 +222,10 @@ function localToDoc(item) {
         type: item.type || 'bookmark',
         name: item.name || '',
         url: item.url || '',
-        parentId: (item.parentId && item.parentId !== null) ? item.parentId : '',
+        parentId: (item.parentId !== null && item.parentId !== undefined) ? item.parentId : '',
         order: item.order || 0,
-        expanded: (item.expanded !== false),
-        userId: (Auth.user && Auth.user.$id) ? Auth.user.$id : ''
+        expanded: item.expanded !== false,
+        userId: Session.userId || ''
     };
 }
 
@@ -289,7 +289,7 @@ function sid(id) { return String(id || ''); }
 function pidMatch(a, b) { return sid(a) === sid(b); }
 
 // ============================================================
-// STATE
+// APP STATE
 // ============================================================
 var bookmarks = [];
 var dragState = { id: null, ghostEl: null, timer: null, active: false, startX: 0, startY: 0, moved: false };
@@ -298,12 +298,13 @@ var confirmResolve = null;
 var appBound = false;
 
 // ============================================================
-// DOM
+// DOM REFS (set after DOMContentLoaded)
 // ============================================================
-var $ = function(s) { return document.querySelector(s); };
 var loginPage, appEl, treeEl, emptyEl, searchInput, clearBtn;
 var modalEl, moveModalEl, ctxMenu, dropZone, rootDrop, toastEl;
 var confirmModalEl, logoutModalEl;
+
+function $(sel) { return document.querySelector(sel); }
 
 function cacheDom() {
     loginPage = $('#loginPage');
@@ -323,30 +324,42 @@ function cacheDom() {
 }
 
 // ============================================================
-// BOOT
+// BOOT — runs once DOM is ready
 // ============================================================
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', function() {
     cacheDom();
     bindLogin();
+    tryAutoLogin();
+});
 
-    if (Auth.load()) {
-        try {
-            var user = await API.getAccount();
-            Auth.user = user;
-            sessionStorage.setItem('aw_user', JSON.stringify(user));
+async function tryAutoLogin() {
+    if (!Session.load()) {
+        showLogin();
+        return;
+    }
+
+    // We have a stored secret — verify it still works
+    try {
+        var user = await apiGetAccount();
+        if (user && user.$id) {
+            Session.userId = user.$id;
+            localStorage.setItem('aw_userId', user.$id);
             await enterApp();
-        } catch (e) {
+        } else {
+            Session.clear();
             showLogin();
         }
-    } else {
+    } catch (e) {
+        Session.clear();
         showLogin();
     }
-});
+}
 
 // ============================================================
 // PAGE SWITCHING
 // ============================================================
 function showLogin() {
+    if (!loginPage || !appEl) return;
     loginPage.classList.remove('hidden');
     appEl.classList.add('hidden');
     bookmarks = [];
@@ -354,11 +367,12 @@ function showLogin() {
 }
 
 async function enterApp() {
+    if (!loginPage || !appEl) return;
     loginPage.classList.add('hidden');
     appEl.classList.remove('hidden');
 
     try {
-        bookmarks = await API.getAll();
+        bookmarks = await apiGetAll();
     } catch (e) {
         bookmarks = [];
         notify('Failed to load bookmarks');
@@ -369,10 +383,12 @@ async function enterApp() {
 }
 
 // ============================================================
-// LOGIN
+// LOGIN FORM
 // ============================================================
 function bindLogin() {
     var form = $('#loginForm');
+    if (!form) return;
+
     var userField = $('#loginUser');
     var passField = $('#loginPass');
     var errEl = $('#loginError');
@@ -380,8 +396,6 @@ function bindLogin() {
     var btnText = $('#loginBtnText');
     var spinner = $('#loginSpinner');
     var togglePass = $('#togglePass');
-
-    if (!form) return;
 
     togglePass.addEventListener('click', function() {
         var isPass = passField.type === 'password';
@@ -407,14 +421,33 @@ function bindLogin() {
         errEl.classList.remove('show');
 
         try {
-            var session = await API.login(email, password);
-            var user = await API.getAccount();
-            Auth.save(session, user);
+            // Step 1: Create session
+            var session = await apiLogin(email, password);
+
+            if (!session || !session.$id) {
+                throw new Error('No session returned');
+            }
+
+            // Save the session secret — this is the key for REST auth
+            var secret = session.secret || session.providerAccessToken || '';
+            Session.save(secret, session.userId || '');
+
+            // Step 2: Get user account to confirm + get userId
+            var user = await apiGetAccount();
+            if (user && user.$id) {
+                Session.userId = user.$id;
+                localStorage.setItem('aw_userId', user.$id);
+            }
+
+            // Step 3: Enter app
             form.reset();
+            errEl.classList.remove('show');
             await enterApp();
+
         } catch (err) {
+            Session.clear();
             var msg = 'Invalid email or password';
-            if (err.message && !err.message.includes('<!')) {
+            if (err.message && err.message.indexOf('<!') === -1 && err.message !== 'No session returned') {
                 msg = err.message;
             }
             errEl.textContent = msg;
@@ -430,7 +463,7 @@ function bindLogin() {
 }
 
 // ============================================================
-// CUSTOM CONFIRM
+// CUSTOM CONFIRM DIALOG
 // ============================================================
 function customConfirm(title, message, actionLabel) {
     return new Promise(function(resolve) {
@@ -452,7 +485,7 @@ function closeConfirm(result) {
 }
 
 // ============================================================
-// RENDER
+// RENDER TREE
 // ============================================================
 function getChildren(pid) {
     return bookmarks
@@ -461,6 +494,7 @@ function getChildren(pid) {
 }
 
 function render(q) {
+    if (!treeEl) return;
     var term = (q || '').toLowerCase().trim();
     treeEl.innerHTML = '';
 
@@ -510,10 +544,8 @@ function mkNode(item, q) {
     } else {
         var fav = faviconOf(item.url);
         var ic = fav
-            ? '<img src="' + fav + '" alt="" onerror="this.outerHTML=\'<svg viewBox=\\\'0 0 24 24\\\' fill=\\\'none\\\' stroke=\\\'currentColor\\\' stroke-width=\\\'2\\\'>'
-              + '<path d=\\\'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\\\'/></svg>\'">'
-            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-              + '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+            ? '<img src="' + fav + '" alt="" onerror="this.outerHTML=\'<svg viewBox=\\\'0 0 24 24\\\' fill=\\\'none\\\' stroke=\\\'currentColor\\\' stroke-width=\\\'2\\\'><path d=\\\'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z\\\'/></svg>\'">'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
         h += '<span class="node-icon">' + ic + '</span>';
         h += '<span class="node-info"><span class="node-name">' + hlText(item.name, q) + '</span>'
            + '<span class="node-url-text">' + hlText(displayUrl(item.url), q) + '</span></span>';
@@ -546,7 +578,7 @@ function mkNode(item, q) {
 }
 
 // ============================================================
-// APP EVENTS
+// BIND APP EVENTS (called once after login)
 // ============================================================
 function bindApp() {
     if (appBound) return;
@@ -566,12 +598,13 @@ function bindApp() {
     $('#addBtn').addEventListener('click', function() { openModal('bookmark'); });
     $('#addFolderBtn').addEventListener('click', function() { openModal('folder'); });
 
+    // Logout
     $('#logoutBtn').addEventListener('click', function() { logoutModalEl.classList.add('on'); });
     $('#logoutNo').addEventListener('click', function() { logoutModalEl.classList.remove('on'); });
     $('#logoutYes').addEventListener('click', async function() {
         logoutModalEl.classList.remove('on');
-        await API.logout();
-        Auth.clear();
+        await apiLogout();
+        Session.clear();
         bookmarks = [];
         treeEl.innerHTML = '';
         appBound = false;
@@ -582,17 +615,20 @@ function bindApp() {
         if (e.target === logoutModalEl) logoutModalEl.classList.remove('on');
     });
 
+    // Modal
     $('#modalClose').addEventListener('click', closeModal);
     $('#cancelBtn').addEventListener('click', closeModal);
     modalEl.addEventListener('click', function(e) { if (e.target === modalEl) closeModal(); });
     $('#itemForm').addEventListener('submit', onSubmit);
 
+    // Confirm
     $('#confirmNo').addEventListener('click', function() { closeConfirm(false); });
     $('#confirmYes').addEventListener('click', function() { closeConfirm(true); });
     confirmModalEl.addEventListener('click', function(e) {
         if (e.target === confirmModalEl) closeConfirm(false);
     });
 
+    // Tree
     treeEl.addEventListener('click', onTreeClick);
     treeEl.addEventListener('contextmenu', onCtxMenu);
     ctxMenu.querySelectorAll('button').forEach(function(b) {
@@ -602,19 +638,23 @@ function bindApp() {
         if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('on');
     });
 
+    // Move modal
     $('#moveClose').addEventListener('click', function() { moveModalEl.classList.remove('on'); });
     moveModalEl.addEventListener('click', function(e) {
         if (e.target === moveModalEl) moveModalEl.classList.remove('on');
     });
 
+    // Mouse drag
     treeEl.addEventListener('mousedown', onPointerDown);
     document.addEventListener('mousemove', onPointerMove);
     document.addEventListener('mouseup', onPointerUp);
 
+    // Touch drag
     treeEl.addEventListener('touchstart', onTouchStart, { passive: false });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     document.addEventListener('touchend', onTouchEnd);
 
+    // External drag-and-drop
     var extC = 0;
     document.addEventListener('dragenter', function(e) {
         if (dragState.active || appEl.classList.contains('hidden')) return;
@@ -639,6 +679,7 @@ function bindApp() {
     });
     document.addEventListener('drop', onExternalDrop);
 
+    // Escape key
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closeModal();
@@ -651,7 +692,7 @@ function bindApp() {
 }
 
 // ============================================================
-// TREE CLICKS
+// TREE CLICK HANDLER
 // ============================================================
 function onTreeClick(e) {
     var tog = e.target.closest('.node-toggle');
@@ -679,7 +720,7 @@ async function toggleFolder(id) {
     var item = bookmarks.find(function(i) { return sid(i.id) === id; });
     if (!item) return;
     item.expanded = !item.expanded;
-    try { await API.update(item.id, { expanded: item.expanded }); } catch (e) {}
+    try { await apiUpdate(item.id, { expanded: item.expanded }); } catch (e) {}
     var li = treeEl.querySelector('.node[data-id="' + id + '"]');
     if (li) {
         var t = li.querySelector('.node-toggle');
@@ -690,7 +731,7 @@ async function toggleFolder(id) {
 }
 
 // ============================================================
-// MODAL
+// ADD / EDIT MODAL
 // ============================================================
 function openModal(type, editId) {
     var form = $('#itemForm');
@@ -755,7 +796,7 @@ async function onSubmit(e) {
 
     try {
         if (id) {
-            await API.update(id, { name: name, url: url, parentId: parentId });
+            await apiUpdate(id, { name: name, url: url, parentId: parentId });
             var idx = bookmarks.findIndex(function(i) { return sid(i.id) === sid(id); });
             if (idx >= 0) {
                 bookmarks[idx].name = name;
@@ -764,15 +805,14 @@ async function onSubmit(e) {
             }
             notify('Updated');
         } else {
-            var newItem = {
+            var created = await apiCreate({
                 type: type,
                 name: name,
                 url: url,
                 parentId: parentId,
                 order: bookmarks.length,
                 expanded: true
-            };
-            var created = await API.create(newItem);
+            });
             bookmarks.push(created);
             notify(type === 'folder' ? 'Folder created' : 'Bookmark saved');
         }
@@ -814,7 +854,7 @@ async function delItem(id) {
         collect(item.id);
 
         for (var d = 0; d < toDelete.length; d++) {
-            await API.deleteDoc(toDelete[d]);
+            await apiDeleteDoc(toDelete[d]);
         }
 
         bookmarks = bookmarks.filter(function(i) {
@@ -912,7 +952,7 @@ async function moveItemTo(id, newPid) {
 
     try {
         var newOrder = bookmarks.filter(function(i) { return pidMatch(i.parentId, newPid); }).length;
-        await API.update(id, { parentId: newPid, order: newOrder });
+        await apiUpdate(id, { parentId: newPid, order: newOrder });
         item.parentId = newPid;
         reorderSibs(newPid);
         moveModalEl.classList.remove('on');
@@ -929,7 +969,7 @@ function reorderSibs(pid) {
 }
 
 // ============================================================
-// DRAG & DROP
+// DRAG & DROP ENGINE
 // ============================================================
 var DRAG_THRESHOLD = 8;
 var LONG_PRESS_MS = 400;
@@ -947,7 +987,7 @@ function clearHighlights() {
         el.classList.remove('drag-over-folder', 'dragging');
     });
     document.querySelectorAll('.drop-bar').forEach(function(el) { el.remove(); });
-    rootDrop.classList.remove('drag-hover');
+    if (rootDrop) rootDrop.classList.remove('drag-hover');
 }
 
 function getDropTarget(x, y) {
@@ -1005,7 +1045,7 @@ async function executeDrop(target) {
             dragged.parentId = null;
             reorderSibs(null);
             reorderSibs(oldPid);
-            await API.update(dragged.id, { parentId: null, order: dragged.order });
+            await apiUpdate(dragged.id, { parentId: null, order: dragged.order });
             notify('Moved to root');
 
         } else if (target.type === 'inside') {
@@ -1028,10 +1068,10 @@ async function executeDrop(target) {
 
             if (!folder.expanded) {
                 folder.expanded = true;
-                try { await API.update(folder.id, { expanded: true }); } catch (e) {}
+                try { await apiUpdate(folder.id, { expanded: true }); } catch (e) {}
             }
 
-            await API.update(dragged.id, { parentId: folder.id, order: dragged.order });
+            await apiUpdate(dragged.id, { parentId: folder.id, order: dragged.order });
             notify('Moved to ' + folder.name);
 
         } else {
@@ -1066,8 +1106,7 @@ async function executeDrop(target) {
             });
 
             reorderSibs(oldPid3);
-
-            await API.batchUpdate(updates);
+            await apiBatchUpdate(updates);
             notify('Reordered');
         }
     } catch (err) { notify('Error: ' + err.message); }
@@ -1075,7 +1114,7 @@ async function executeDrop(target) {
     render(searchInput.value);
 }
 
-// ---- Mouse ----
+// ---- Mouse drag ----
 function onPointerDown(e) {
     if (e.button !== 0) return;
     var row = e.target.closest('.node-row');
@@ -1122,7 +1161,7 @@ function onPointerUp(e) {
     if (wasMoved) setTimeout(function() { dragState.moved = false; }, 50);
 }
 
-// ---- Touch ----
+// ---- Touch drag ----
 function onTouchStart(e) {
     var row = e.target.closest('.node-row');
     if (!row || e.target.closest('.act,.node-toggle')) return;
@@ -1180,7 +1219,7 @@ function onTouchEnd(e) {
     setTimeout(function() { dragState.moved = false; }, 50);
 }
 
-// ---- External Drop ----
+// ---- External link drop ----
 async function onExternalDrop(e) {
     dropZone.classList.remove('active');
     if (dragState.active || appEl.classList.contains('hidden')) return;
@@ -1212,7 +1251,7 @@ async function onExternalDrop(e) {
     try {
         for (var u = 0; u < urls.length; u++) {
             var entry = urls[u];
-            var created = await API.create({
+            var created = await apiCreate({
                 type: 'bookmark',
                 name: entry.name || extractUrlName(entry.url),
                 url: entry.url,
