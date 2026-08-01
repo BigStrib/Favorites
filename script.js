@@ -91,7 +91,7 @@ async function dbGetAll() {
 
     while (keepGoing) {
         var queries = [
-            sdk.Query.equal('userId', currentUser.$id),
+            sdk.Query.equal('userID', currentUser.$id),  // ✅ FIXED
             sdk.Query.orderAsc('order'),
             sdk.Query.limit(100)
         ];
@@ -112,55 +112,18 @@ async function dbGetAll() {
     return allDocs.map(docToLocal);
 }
 
-async function dbCreate(item) {
-    var sdk = window.Appwrite;
-    var data = localToDoc(item);
-    var res = await databases.createDocument(AW_DB, AW_COL, sdk.ID.unique(), data);
-    return docToLocal(res);
-}
-
-async function dbUpdate(id, fields) {
-    var patch = {};
-    if (fields.name !== undefined) patch.name = fields.name;
-    if (fields.url !== undefined) patch.url = fields.url;
-    if (fields.expanded !== undefined) patch.expanded = fields.expanded;
-    if (fields.order !== undefined) patch.order = fields.order;
-    if (fields.type !== undefined) patch.type = fields.type;
-    if (fields.parentId !== undefined) {
-        patch.parentId = (fields.parentId === null) ? '' : fields.parentId;
-    }
-    var res = await databases.updateDocument(AW_DB, AW_COL, id, patch);
-    return docToLocal(res);
-}
-
-async function dbDeleteDoc(id) {
-    await databases.deleteDocument(AW_DB, AW_COL, id);
-}
-
-async function dbBatchUpdate(updates) {
-    for (var i = 0; i < updates.length; i += 5) {
-        var chunk = updates.slice(i, i + 5);
-        await Promise.all(chunk.map(function(u) {
-            var d = { order: u.order };
-            if (u.parentId !== undefined) d.parentId = u.parentId;
-            return dbUpdate(u.id, d);
-        }));
-    }
-}
-
 // ============================================================
 // DATA CONVERTERS
 // ============================================================
-function docToLocal(doc) {
-    if (!doc) return { id: '', type: 'bookmark', name: '', url: '', parentId: null, order: 0, expanded: true };
+function localToDoc(item) {
     return {
-        id: doc.$id || '',
-        type: doc.type || 'bookmark',
-        name: doc.name || '',
-        url: doc.url || '',
-        parentId: (doc.parentId && doc.parentId !== '') ? doc.parentId : null,
-        order: (typeof doc.order === 'number') ? doc.order : 0,
-        expanded: doc.expanded !== false
+        type: item.type || 'bookmark',
+        name: item.name || '',
+        url: item.url || '',
+        parentId: (item.parentId !== null && item.parentId !== undefined) ? String(item.parentId) : '',
+        order: item.order || 0,
+        expanded: item.expanded !== false,
+        userID: currentUser ? currentUser.$id : ''  // ✅ FIXED
     };
 }
 
