@@ -2,8 +2,8 @@
 // APPWRITE CONFIG (UPDATED)
 // ============================================================
 var AW = {
-    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',
-    PROJECT_ID: '6a6dd3c900350363b8e7', // Removed "sfo-" prefix
+    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',   // Regional endpoint
+    PROJECT_ID: '6a6dd3c900350363b8e7',            // Project ID (Should NOT have "sfo-" prefix)
     DATABASE_ID: '6a6dd4fb001f662f0f79',
     COLLECTION_ID: 'bookmarks'
 };
@@ -39,15 +39,21 @@ var Auth = {
         sessionStorage.removeItem('aw_user');
     },
 
-    headers: function() {
-        var h = {
-            'Content-Type': 'application/json',
-            'X-Appwrite-Project': AW.PROJECT_ID
-        };
-        // Cookie-based auth is default for Appwrite web,
-        // but for REST we pass the session cookie/fallback
-        return h;
+   headers: function() {
+    var h = {
+        'Content-Type': 'application/json',
+        'X-Appwrite-Project': AW.PROJECT_ID,
+        'X-Appwrite-Response-Format': '1.5.0' // Tells Appwrite REST API how to respond
+    };
+    
+    // Pass session secret if stored (bypasses browser third-party cookie blocking)
+    if (this.session && this.session.secret) {
+        h['X-Appwrite-Session'] = this.session.secret;
     }
+    
+    return h;
+}
+
 };
 
 // ============================================================
