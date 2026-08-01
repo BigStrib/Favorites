@@ -150,13 +150,7 @@ body {
     box-shadow: 0 0 0 2px var(--red-glow);
 }
 
-.login-field input:focus + .field-icon,
-.login-field input:focus ~ .field-icon {
-    color: var(--red);
-}
-
-/* Re-target: icon is before input, so use has */
-.login-field:has(input:focus) .field-icon {
+.login-page:has(input:focus) .field-icon {
     color: var(--red);
 }
 
@@ -202,7 +196,6 @@ body {
     align-items: center;
     justify-content: center;
     gap: 8px;
-    position: relative;
 }
 
 .login-submit:disabled {
@@ -210,10 +203,7 @@ body {
     cursor: not-allowed;
 }
 
-.spinner {
-    animation: spin 0.8s linear infinite;
-}
-
+.spinner { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ===== APP ===== */
@@ -223,7 +213,6 @@ body {
     padding: 20px 16px 80px;
 }
 
-/* ===== Top Bar ===== */
 .top-bar {
     display: flex;
     align-items: center;
@@ -287,13 +276,12 @@ body {
 .icon-btn.logout:hover svg { color: var(--red); }
 .icon-btn:active { transform: scale(0.93); }
 
-/* ===== Drop Zone ===== */
 .drop-zone {
     display: none;
     align-items: center; justify-content: center;
     gap: 12px; flex-direction: column;
     position: fixed; inset: 0; z-index: 999;
-    background: rgba(0, 0, 0, 0.88);
+    background: rgba(0,0,0,0.88);
     backdrop-filter: blur(6px);
     border: 2px dashed var(--red-dim);
     color: var(--red); font-size: 0.9rem; font-weight: 600;
@@ -303,7 +291,6 @@ body {
 .drop-zone.active { display: flex; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-/* ===== Root Drop ===== */
 .root-drop {
     margin-top: 8px;
     padding: 14px;
@@ -321,7 +308,6 @@ body {
     background: var(--red-soft);
 }
 
-/* ===== Tree ===== */
 .tree { list-style: none; padding: 0; }
 
 .tree ul {
@@ -338,7 +324,6 @@ body {
     background: var(--border);
 }
 
-/* ===== Drop Bar ===== */
 .drop-bar {
     height: 2px;
     background: var(--red);
@@ -348,7 +333,6 @@ body {
     pointer-events: none;
 }
 
-/* ===== Nodes ===== */
 .node { position: relative; }
 
 .node-row {
@@ -365,8 +349,8 @@ body {
     touch-action: pan-y;
 }
 
-.node-row:hover { background: rgba(255, 255, 255, 0.03); }
-.node-row:active { background: rgba(255, 255, 255, 0.05); }
+.node-row:hover { background: rgba(255,255,255,0.03); }
+.node-row:active { background: rgba(255,255,255,0.05); }
 .node-row.drag-over-folder { background: var(--red-glow); outline: 1px solid var(--red-dim); outline-offset: -1px; }
 .node-row.dragging { opacity: 0.2; }
 
@@ -431,14 +415,13 @@ body {
     transition: background 0.12s, color 0.12s;
 }
 
-.act:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.act:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 .act.del:hover { color: var(--red); }
 .act svg { width: 14px; height: 14px; }
 
 .folder-kids { overflow: hidden; transition: max-height 0.25s ease; }
 .folder-kids.shut { max-height: 0 !important; }
 
-/* ===== Empty ===== */
 .empty {
     text-align: center; padding: 60px 20px; color: var(--text3);
 }
@@ -452,10 +435,9 @@ body {
     font-size: 0.85rem; list-style: none;
 }
 
-/* ===== Modal ===== */
 .modal-overlay {
     display: none; position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0, 0, 0, 0.65);
+    background: rgba(0,0,0,0.65);
     align-items: center; justify-content: center;
     padding: 20px;
     backdrop-filter: blur(4px);
@@ -551,12 +533,11 @@ form select option { background: var(--surface); color: var(--text); }
 .btn.danger-btn { background: var(--red); color: #fff; }
 .btn.danger-btn:hover { background: var(--red-dim); }
 
-/* ===== Context Menu ===== */
 .ctx {
     display: none; position: fixed; z-index: 1100;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 4px; min-width: 160px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
 }
 
 .ctx.on { display: block; }
@@ -570,11 +551,10 @@ form select option { background: var(--surface); color: var(--text); }
     transition: background 0.1s;
 }
 
-.ctx button:hover { background: rgba(255, 255, 255, 0.05); }
+.ctx button:hover { background: rgba(255,255,255,0.05); }
 .ctx button.danger:hover { color: var(--red); }
 .ctx-div { height: 1px; background: var(--border); margin: 3px 8px; }
 
-/* ===== Move List ===== */
 .move-list {
     padding: 0 16px 16px;
     max-height: 280px; overflow-y: auto;
@@ -587,11 +567,10 @@ form select option { background: var(--surface); color: var(--text); }
     display: flex; align-items: center; gap: 8px;
 }
 
-.mv-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+.mv-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
 .mv-item.current { color: var(--red); font-weight: 600; }
 .mv-item svg { width: 14px; height: 14px; color: var(--red); flex-shrink: 0; }
 
-/* ===== Toast ===== */
 .toast {
     position: fixed; bottom: 24px; left: 50%;
     transform: translateX(-50%) translateY(80px);
@@ -599,9 +578,9 @@ form select option { background: var(--surface); color: var(--text); }
     color: var(--text); padding: 10px 20px;
     border-radius: var(--radius); font-size: 0.82rem;
     font-weight: 500;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     z-index: 2000;
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
     white-space: nowrap; pointer-events: none;
 }
 
@@ -609,13 +588,12 @@ form select option { background: var(--surface); color: var(--text); }
 
 .hl { background: var(--red-dim); color: #fff; border-radius: 2px; padding: 0 1px; }
 
-/* ===== Drag Ghost ===== */
 .drag-ghost {
     position: fixed; z-index: 9999;
     pointer-events: none; opacity: 0.9;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
     padding: 8px 12px;
     font-size: 0.85rem; font-weight: 600;
     color: var(--text);
@@ -623,13 +601,11 @@ form select option { background: var(--surface); color: var(--text); }
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ===== Scrollbar ===== */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
 
-/* ===== Touch ===== */
 @media (hover: none) and (pointer: coarse) {
     .node-actions { opacity: 1; }
     .node-row { padding: 11px 10px; }
