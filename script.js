@@ -1,9 +1,9 @@
 // ============================================================
-// APPWRITE CONFIG (UPDATED)
+// APPWRITE CONFIG
 // ============================================================
 var AW = {
     ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',
-    PROJECT_ID: '6a6dd3c900350363b8e7', // Clean Project ID from Appwrite Console
+    PROJECT_ID: '6a6dd3c900350363b8e7',
     DATABASE_ID: '6a6dd4fb001f662f0f79',
     COLLECTION_ID: 'bookmarks'
 };
@@ -28,7 +28,7 @@ var Auth = {
             var u = sessionStorage.getItem('aw_user');
             if (s) this.session = JSON.parse(s);
             if (u) this.user = JSON.parse(u);
-        } catch {}
+        } catch (e) {}
         return !!(this.session);
     },
 
@@ -39,54 +39,62 @@ var Auth = {
         sessionStorage.removeItem('aw_user');
     },
 
-   headers: function() {
-    var h = {
-        'Content-Type': 'application/json',
-        'X-Appwrite-Project': AW.PROJECT_ID,
-        'X-Appwrite-Response-Format': '1.5.0' // Tells Appwrite REST API how to respond
-    };
-    
-    // Pass session secret if stored (bypasses browser third-party cookie blocking)
-    if (this.session && this.session.secret) {
-        h['X-Appwrite-Session'] = this.session.secret;
+    headers: function() {
+        var h = {
+            'Content-Type': 'application/json',
+            'X-Appwrite-Project': AW.PROJECT_ID,
+            'X-Appwrite-Response-Format': '1.5.0'
+        };
+        if (this.session && this.session.secret) {
+            h['X-Appwrite-Session'] = this.session.secret;
+        }
+        return h;
     }
-    
-    return h;
-}
-
 };
 
 // ============================================================
-// API — Appwrite REST
+// API — Appwrite REST (single clean object)
 // ============================================================
-create: async function(item) {
-    // 1. Get current document data
-    var docData = localToDoc(item);
-    
-    // 2. Ensure userId is populated from current Auth session
-    if (Auth.user && Auth.user.$id) {
-        docData.userId = Auth.user.$id;
-    }
+var API = {
 
-    // 3. Generate a client ID or use 'unique()'
-    var generatedId = 'doc_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+    req: async function(method, path, body) {
+        var opts = {
+            method: method,
+            headers: Auth.headers(),
+            credentials: 'include'
+        };
+        if (body) opts.body = JSON.stringify(body);
 
-    var body = {
-        documentId: generatedId,
-        data: docData
-    };
+        var res;
+        try {
+            res = await fetch(AW.ENDPOINT + path, opts);
+        } catch (networkErr) {
+            throw new Error('Network error: ' + networkErr.message);
+        }
 
-    var url = '/databases/' + AW.DATABASE_ID
-            + '/collections/' + AW.COLLECTION_ID
-            + '/documents';
+        if (res.status === 401) {
+            Auth.clear();
+            showLogin();
+            throw new Error('Session expired');
+        }
 
-    var res = await this.req('POST', url, body);
-    return docToLocal(res);
-},
+        var responseText = await res.text();
+        var data = null;
+        if (responseText) {
+            try { data = JSON.parse(responseText); } catch (e) { data = null; }
+        }
+
+        if (!res.ok) {
+            var errMsg = (data && data.message) ? data.message : res.statusText;
+            throw new Error(errMsg);
+        }
+
+        return data;
+    },
 
     // ---- Auth ----
+
     login: async function(email, password) {
-        // Create email session
         var session = await this.req('POST', '/account/sessions/email', {
             email: email,
             password: password
@@ -102,51 +110,86 @@ create: async function(item) {
     logout: async function() {
         try {
             await this.req('DELETE', '/account/sessions/current');
-        } catch {}
+        } catch (e) {}
     },
 
     // ---- Database ----
+
     getAll: async function() {
-        var userId = Auth.user ? Auth.user.$id : '';
+        var userId = (Auth.user && Auth.user.$id) ? Auth.user.$id : '';
+        if (!userId) return [];
+
         var queries = [
             'equal("userId",["' + userId + '"])',
             'limit(500)',
             'orderAsc("order")'
         ];
+
+        var queryString = queries.map(function(q) {
+            return 'queries[]=' + encodeURIComponent(q);
+        }).join('&');
+
         var url = '/databases/' + AW.DATABASE_ID
                 + '/collections/' + AW.COLLECTION_ID
-                + '/documents?queries[]=' + queries.map(encodeURIComponent).join('&queries[]=');
+                + '/documents?' + queryString;
+
         var res = await this.req('GET', url);
-        return (res.documents || []).map(function(doc) { return docToLocal(doc); });
+        if (!res || !res.documents) return [];
+        return res.documents.map(function(doc) { return docToLocal(doc); });
     },
 
-   create: async function(item) {
-    // Generate a valid 20-character unique string ID for Appwrite REST
-    var generatedId = 'doc_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+    create: async function(item) {
+        var docData = localToDoc(item);
 
-    var docData = localToDoc(item);
-    
-    // Explicitly attach current logged-in user ID if required by your collection schema
-    if (Auth.user && Auth.user.$id) {
-        docData.userId = Auth.user.$id;
-    }
+        if (Auth.user && Auth.user.$id) {
+            docData.userId = Auth.user.$id;
+        }
 
-    var body = {
-        documentId: generatedId,
-        data: docData
-    };
+        // Generate valid Appwrite document ID: 1-36 chars, alphanumeric, hyphen, underscore
+        var generatedId = 'bk' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
 
-    var url = '/databases/' + AW.DATABASE_ID
-            + '/collections/' + AW.COLLECTION_ID
-            + '/documents';
+        var body = {
+            documentId: generatedId,
+            data: docData
+        };
 
-    var res = await this.req('POST', url, body);
-    return docToLocal(res);
-},
+        var url = '/databases/' + AW.DATABASE_ID
+                + '/collections/' + AW.COLLECTION_ID
+                + '/documents';
+
+        var res = await this.req('POST', url, body);
+        return docToLocal(res);
+    },
+
+    update: async function(id, data) {
+        var patchData = {};
+        if (data.name !== undefined) patchData.name = data.name;
+        if (data.url !== undefined) patchData.url = data.url;
+        if (data.expanded !== undefined) patchData.expanded = data.expanded;
+        if (data.order !== undefined) patchData.order = data.order;
+        if (data.type !== undefined) patchData.type = data.type;
+        if (data.parentId !== undefined) {
+            patchData.parentId = (data.parentId === null || data.parentId === undefined) ? '' : data.parentId;
+        }
+
+        var body = { data: patchData };
+        var url = '/databases/' + AW.DATABASE_ID
+                + '/collections/' + AW.COLLECTION_ID
+                + '/documents/' + id;
+
+        var res = await this.req('PATCH', url, body);
+        return docToLocal(res);
+    },
+
+    deleteDoc: async function(id) {
+        var url = '/databases/' + AW.DATABASE_ID
+                + '/collections/' + AW.COLLECTION_ID
+                + '/documents/' + id;
+        await this.req('DELETE', url);
+    },
 
     batchUpdate: async function(updates) {
-        // Appwrite has no native batch endpoint; run in parallel chunks
-        var chunkSize = 10;
+        var chunkSize = 8;
         for (var i = 0; i < updates.length; i += chunkSize) {
             var chunk = updates.slice(i, i + chunkSize);
             await Promise.all(chunk.map(function(u) {
@@ -162,13 +205,14 @@ create: async function(item) {
 // DATA CONVERTERS
 // ============================================================
 function docToLocal(doc) {
+    if (!doc) return { id: '', type: 'bookmark', name: '', url: '', parentId: null, order: 0, expanded: true };
     return {
-        id: doc.$id,
+        id: doc.$id || '',
         type: doc.type || 'bookmark',
         name: doc.name || '',
         url: doc.url || '',
-        parentId: doc.parentId || null,
-        order: typeof doc.order === 'number' ? doc.order : 0,
+        parentId: (doc.parentId && doc.parentId !== '') ? doc.parentId : null,
+        order: (typeof doc.order === 'number') ? doc.order : 0,
         expanded: doc.expanded !== false
     };
 }
@@ -178,10 +222,10 @@ function localToDoc(item) {
         type: item.type || 'bookmark',
         name: item.name || '',
         url: item.url || '',
-        parentId: item.parentId || '',
+        parentId: (item.parentId && item.parentId !== null) ? item.parentId : '',
         order: item.order || 0,
-        expanded: item.expanded !== false,
-        userId: Auth.user ? Auth.user.$id : ''
+        expanded: (item.expanded !== false),
+        userId: (Auth.user && Auth.user.$id) ? Auth.user.$id : ''
     };
 }
 
@@ -193,11 +237,11 @@ function normalizeUrl(raw) {
     if (!s) return '';
     s = s.replace(/^["'<\s]+|["'>\s]+$/g, '');
     if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(s)) {
-        try { new URL(s); return s; } catch {}
+        try { new URL(s); return s; } catch (e) {}
     }
     s = s.replace(/^\/\//, '');
     if (/^[^\s]+\.[^\s]+/.test(s)) {
-        try { new URL('https://' + s); return 'https://' + s; } catch {}
+        try { new URL('https://' + s); return 'https://' + s; } catch (e) {}
     }
     if (/^[a-zA-Z0-9][-a-zA-Z0-9]*$/.test(s)) return 'https://' + s + '.com';
     return 'https://' + s;
@@ -207,7 +251,7 @@ function extractUrlName(url) {
     try {
         var h = new URL(url).hostname.replace(/^www\./, '');
         return h.charAt(0).toUpperCase() + h.slice(1);
-    } catch { return url.slice(0, 40); }
+    } catch (e) { return url.slice(0, 40); }
 }
 
 function displayUrl(url) {
@@ -217,12 +261,12 @@ function displayUrl(url) {
         var d = u.hostname.replace(/^www\./, '') + u.pathname;
         if (d.endsWith('/')) d = d.slice(0, -1);
         return d.length > 55 ? d.slice(0, 52) + '…' : d;
-    } catch { return url.length > 55 ? url.slice(0, 52) + '…' : url; }
+    } catch (e) { return url.length > 55 ? url.slice(0, 52) + '…' : url; }
 }
 
 function faviconOf(url) {
     try { return 'https://www.google.com/s2/favicons?domain=' + new URL(url).hostname + '&sz=32'; }
-    catch { return null; }
+    catch (e) { return null; }
 }
 
 function esc(s) {
@@ -257,39 +301,47 @@ var appBound = false;
 // DOM
 // ============================================================
 var $ = function(s) { return document.querySelector(s); };
-var loginPage = $('#loginPage');
-var appEl = $('#app');
-var treeEl = $('#tree');
-var emptyEl = $('#empty');
-var searchInput = $('#searchInput');
-var clearBtn = $('#clearSearch');
-var modalEl = $('#modal');
-var moveModalEl = $('#moveModal');
-var ctxMenu = $('#ctx');
-var dropZone = $('#dropZone');
-var rootDrop = $('#rootDrop');
-var toastEl = $('#toast');
-var confirmModalEl = $('#confirmModal');
-var logoutModalEl = $('#logoutModal');
+var loginPage, appEl, treeEl, emptyEl, searchInput, clearBtn;
+var modalEl, moveModalEl, ctxMenu, dropZone, rootDrop, toastEl;
+var confirmModalEl, logoutModalEl;
+
+function cacheDom() {
+    loginPage = $('#loginPage');
+    appEl = $('#app');
+    treeEl = $('#tree');
+    emptyEl = $('#empty');
+    searchInput = $('#searchInput');
+    clearBtn = $('#clearSearch');
+    modalEl = $('#modal');
+    moveModalEl = $('#moveModal');
+    ctxMenu = $('#ctx');
+    dropZone = $('#dropZone');
+    rootDrop = $('#rootDrop');
+    toastEl = $('#toast');
+    confirmModalEl = $('#confirmModal');
+    logoutModalEl = $('#logoutModal');
+}
 
 // ============================================================
 // BOOT
 // ============================================================
-(async function boot() {
+document.addEventListener('DOMContentLoaded', async function() {
+    cacheDom();
     bindLogin();
+
     if (Auth.load()) {
         try {
             var user = await API.getAccount();
             Auth.user = user;
             sessionStorage.setItem('aw_user', JSON.stringify(user));
             await enterApp();
-        } catch {
+        } catch (e) {
             showLogin();
         }
     } else {
         showLogin();
     }
-})();
+});
 
 // ============================================================
 // PAGE SWITCHING
@@ -298,7 +350,7 @@ function showLogin() {
     loginPage.classList.remove('hidden');
     appEl.classList.add('hidden');
     bookmarks = [];
-    treeEl.innerHTML = '';
+    if (treeEl) treeEl.innerHTML = '';
 }
 
 async function enterApp() {
@@ -307,7 +359,7 @@ async function enterApp() {
 
     try {
         bookmarks = await API.getAll();
-    } catch {
+    } catch (e) {
         bookmarks = [];
         notify('Failed to load bookmarks');
     }
@@ -328,6 +380,8 @@ function bindLogin() {
     var btnText = $('#loginBtnText');
     var spinner = $('#loginSpinner');
     var togglePass = $('#togglePass');
+
+    if (!form) return;
 
     togglePass.addEventListener('click', function() {
         var isPass = passField.type === 'password';
@@ -512,7 +566,6 @@ function bindApp() {
     $('#addBtn').addEventListener('click', function() { openModal('bookmark'); });
     $('#addFolderBtn').addEventListener('click', function() { openModal('folder'); });
 
-    // Logout
     $('#logoutBtn').addEventListener('click', function() { logoutModalEl.classList.add('on'); });
     $('#logoutNo').addEventListener('click', function() { logoutModalEl.classList.remove('on'); });
     $('#logoutYes').addEventListener('click', async function() {
@@ -529,20 +582,17 @@ function bindApp() {
         if (e.target === logoutModalEl) logoutModalEl.classList.remove('on');
     });
 
-    // Modal
     $('#modalClose').addEventListener('click', closeModal);
     $('#cancelBtn').addEventListener('click', closeModal);
     modalEl.addEventListener('click', function(e) { if (e.target === modalEl) closeModal(); });
     $('#itemForm').addEventListener('submit', onSubmit);
 
-    // Confirm
     $('#confirmNo').addEventListener('click', function() { closeConfirm(false); });
     $('#confirmYes').addEventListener('click', function() { closeConfirm(true); });
     confirmModalEl.addEventListener('click', function(e) {
         if (e.target === confirmModalEl) closeConfirm(false);
     });
 
-    // Tree clicks
     treeEl.addEventListener('click', onTreeClick);
     treeEl.addEventListener('contextmenu', onCtxMenu);
     ctxMenu.querySelectorAll('button').forEach(function(b) {
@@ -552,23 +602,19 @@ function bindApp() {
         if (!ctxMenu.contains(e.target)) ctxMenu.classList.remove('on');
     });
 
-    // Move modal
     $('#moveClose').addEventListener('click', function() { moveModalEl.classList.remove('on'); });
     moveModalEl.addEventListener('click', function(e) {
         if (e.target === moveModalEl) moveModalEl.classList.remove('on');
     });
 
-    // Mouse drag
     treeEl.addEventListener('mousedown', onPointerDown);
     document.addEventListener('mousemove', onPointerMove);
     document.addEventListener('mouseup', onPointerUp);
 
-    // Touch drag
     treeEl.addEventListener('touchstart', onTouchStart, { passive: false });
     document.addEventListener('touchmove', onTouchMove, { passive: false });
     document.addEventListener('touchend', onTouchEnd);
 
-    // External drag-and-drop
     var extC = 0;
     document.addEventListener('dragenter', function(e) {
         if (dragState.active || appEl.classList.contains('hidden')) return;
@@ -593,7 +639,6 @@ function bindApp() {
     });
     document.addEventListener('drop', onExternalDrop);
 
-    // Keyboard
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closeModal();
@@ -634,7 +679,7 @@ async function toggleFolder(id) {
     var item = bookmarks.find(function(i) { return sid(i.id) === id; });
     if (!item) return;
     item.expanded = !item.expanded;
-    try { await API.update(item.id, { expanded: item.expanded }); } catch {}
+    try { await API.update(item.id, { expanded: item.expanded }); } catch (e) {}
     var li = treeEl.querySelector('.node[data-id="' + id + '"]');
     if (li) {
         var t = li.querySelector('.node-toggle');
@@ -645,7 +690,7 @@ async function toggleFolder(id) {
 }
 
 // ============================================================
-// MODAL (Add / Edit)
+// MODAL
 // ============================================================
 function openModal(type, editId) {
     var form = $('#itemForm');
@@ -710,7 +755,7 @@ async function onSubmit(e) {
 
     try {
         if (id) {
-            var updated = await API.update(id, { name: name, url: url, parentId: parentId });
+            await API.update(id, { name: name, url: url, parentId: parentId });
             var idx = bookmarks.findIndex(function(i) { return sid(i.id) === sid(id); });
             if (idx >= 0) {
                 bookmarks[idx].name = name;
@@ -983,7 +1028,7 @@ async function executeDrop(target) {
 
             if (!folder.expanded) {
                 folder.expanded = true;
-                try { await API.update(folder.id, { expanded: true }); } catch {}
+                try { await API.update(folder.id, { expanded: true }); } catch (e) {}
             }
 
             await API.update(dragged.id, { parentId: folder.id, order: dragged.order });
@@ -1187,6 +1232,7 @@ async function onExternalDrop(e) {
 // ============================================================
 var toastTimer;
 function notify(msg) {
+    if (!toastEl) return;
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
