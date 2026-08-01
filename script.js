@@ -46,17 +46,10 @@ function initSDK() {
 // AUTH
 // ============================================================
 async function doLogin(email, password) {
-    // First delete any stale session
     try {
         await account.deleteSession('current');
-    } catch (e) {
-        // No existing session — that's fine
-    }
-
-    // Create new session
+    } catch (e) {}
     await account.createEmailPasswordSession(email, password);
-
-    // Verify we can get account
     currentUser = await account.get();
     return currentUser;
 }
@@ -91,17 +84,15 @@ async function dbGetAll() {
 
     while (keepGoing) {
         var queries = [
-            sdk.Query.equal('userID', currentUser.$id),  // ✅ FIXED
+            sdk.Query.equal('userID', currentUser.$id),
             sdk.Query.orderAsc('order'),
             sdk.Query.limit(100)
         ];
         if (lastId) {
             queries.push(sdk.Query.cursorAfter(lastId));
         }
-
         var res = await databases.listDocuments(AW_DB, AW_COL, queries);
         allDocs = allDocs.concat(res.documents);
-
         if (res.documents.length < 100) {
             keepGoing = false;
         } else {
@@ -112,21 +103,59 @@ async function dbGetAll() {
     return allDocs.map(docToLocal);
 }
 
+async function dbCreate(item) {
+    var sdk = window.Appwrite;
+    var data = localToDoc(item);
+    var res = await databases.createDocument(AW_DB, AW_COL, sdk.ID.unique(), data);
+    return docToLocal(res);
+}
+
+async function dbUpdate(id, fields) {
+    var patch = {};
+    if (fields.name !== undefined) patch.name = fields.name;
+    if (fields.url !== undefined) patch.url = fields.url;
+    if (fields.expanded !== undefined) patch.expanded = fields.expanded;
+    if (fields.order !== undefined) patch.order = fields.order;
+    if (fields.type !== undefined) patch.type = fields.type;
+    if (fields.parentId !== undefined) {
+        patch.parentId = (fields.parentId === null) ? '' : fields.parentId;
+    }
+    var res = await databases.updateDocument(AW_DB, AW_COL, id, patch);
+    return docToLocal(res);
+}
+
+async function dbDeleteDoc(id) {
+    await databases.deleteDocument(AW_DB, AW_COL, id);
+}
+
+async function dbBatchUpdate(updates) {
+    for (var i = 0; i < updates.length; i += 5) {
+        var chunk = updates.slice(i, i + 5);
+        await Promise.all(chunk.map(function(u) {
+            var d = { order: u.order };
+            if (u.parentId !== undefined) d.parentId = u.parentId;
+            return dbUpdate(u.id, d);
+        }));
+    }
+}
+
 // ============================================================
 // DATA CONVERTERS
 // ============================================================
-function localToDoc(item) {
+function docToLocal(doc) {
+    if (!doc) return { id: '', type: 'bookmark', name: '', url: '', parentId: null, order: 0, expanded: true };
     return {
-        type: item.type || 'bookmark',
-        name: item.name || '',
-        url: item.url || '',
-        parentId: (item.parentId !== null && item.parentId !== undefined) ? String(item.parentId) : '',
-        order: item.order || 0,
-        expanded: item.expanded !== false,
-        userID: currentUser ? currentUser.$id : ''  // ✅ FIXED
+        id: doc.$id || '',
+        type: doc.type || 'bookmark',
+        name: doc.name || '',
+        url: doc.url || '',
+        parentId: (doc.parentId && doc.parentId !== '') ? doc.parentId : null,
+        order: (typeof doc.order === 'number') ? doc.order : 0,
+        expanded: doc.expanded !== false
     };
 }
 
+// ✅ Only ONE localToDoc - correctly uses userID
 function localToDoc(item) {
     return {
         type: item.type || 'bookmark',
@@ -135,7 +164,7 @@ function localToDoc(item) {
         parentId: (item.parentId !== null && item.parentId !== undefined) ? String(item.parentId) : '',
         order: item.order || 0,
         expanded: item.expanded !== false,
-        userId: currentUser ? currentUser.$id : ''
+        userID: currentUser ? currentUser.$id : ''
     };
 }
 
@@ -238,7 +267,6 @@ function cacheDom() {
 // ============================================================
 document.addEventListener('DOMContentLoaded', async function() {
     cacheDom();
-
     try {
         await loadSDK();
         initSDK();
@@ -246,9 +274,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         showLoginError('Failed to initialize. Please refresh the page.');
         return;
     }
-
     bindLogin();
-
     var loggedIn = await checkExistingSession();
     if (loggedIn) {
         await enterApp();
@@ -279,14 +305,12 @@ function showLoginError(msg) {
 async function enterApp() {
     if (loginPage) loginPage.classList.add('hidden');
     if (appEl) appEl.classList.remove('hidden');
-
     try {
         bookmarks = await dbGetAll();
     } catch (e) {
         bookmarks = [];
         notify('Failed to load bookmarks');
     }
-
     render();
     bindApp();
 }
@@ -319,27 +343,22 @@ function bindLogin() {
 
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
-
         if (!sdkReady) {
             errEl.textContent = 'Still loading, please wait...';
             errEl.classList.add('show');
             return;
         }
-
         var email = userField.value.trim();
         var password = passField.value;
-
         if (!email || !password) {
             errEl.textContent = 'Please enter both fields';
             errEl.classList.add('show');
             return;
         }
-
         btn.disabled = true;
         btnText.textContent = 'Signing in…';
         if (spinner) spinner.style.display = '';
         errEl.classList.remove('show');
-
         try {
             await doLogin(email, password);
             form.reset();
@@ -411,7 +430,6 @@ function render(q) {
     if (!treeEl) return;
     var term = (q || '').toLowerCase().trim();
     treeEl.innerHTML = '';
-
     if (term) {
         var hits = bookmarks.filter(function(i) {
             return i.name.toLowerCase().includes(term) || (i.url && i.url.toLowerCase().includes(term));
