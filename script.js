@@ -2,8 +2,8 @@
 // APPWRITE CONFIG (UPDATED)
 // ============================================================
 var AW = {
-    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',   // Regional endpoint
-    PROJECT_ID: '6a6dd3c900350363b8e7',            // Project ID (Should NOT have "sfo-" prefix)
+    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',
+    PROJECT_ID: '6a6dd3c900350363b8e7', // Clean Project ID from Appwrite Console
     DATABASE_ID: '6a6dd4fb001f662f0f79',
     COLLECTION_ID: 'bookmarks'
 };
@@ -59,28 +59,33 @@ var Auth = {
 // ============================================================
 // API — Appwrite REST
 // ============================================================
-var API = {
-    req: async function(method, path, body) {
-        var opts = {
-            method: method,
-            headers: Auth.headers(),
-            credentials: 'include'           // send session cookie
-        };
-        if (body) opts.body = JSON.stringify(body);
-        var res = await fetch(AW.ENDPOINT + path, opts);
+req: async function(method, path, body) {
+    var opts = {
+        method: method,
+        headers: Auth.headers(),
+        credentials: 'include'
+    };
+    if (body) opts.body = JSON.stringify(body);
+    
+    var res = await fetch(AW.ENDPOINT + path, opts);
+
+    if (!res.ok) {
+        var errData;
+        try { errData = await res.json(); } catch { errData = { message: res.statusText }; }
+        
+        // 🔴 THIS LOG WILL PRINT THE EXACT REASON FOR 400:
+        console.error("APPWRITE ERROR DETAILS:", errData);
+        
         if (res.status === 401) {
             Auth.clear();
             showLogin();
             throw new Error('Session expired');
         }
-        if (!res.ok) {
-            var errData;
-            try { errData = await res.json(); } catch { errData = { message: res.statusText }; }
-            throw new Error(errData.message || res.statusText);
-        }
-        var txt = await res.text();
-        return txt ? JSON.parse(txt) : null;
-    },
+        throw new Error(errData.message || res.statusText);
+    }
+    var txt = await res.text();
+    return txt ? JSON.parse(txt) : null;
+},
 
     // ---- Auth ----
     login: async function(email, password) {
@@ -118,41 +123,29 @@ var API = {
         return (res.documents || []).map(function(doc) { return docToLocal(doc); });
     },
 
-    create: async function(item) {
-        var body = {
-            documentId: 'unique()',
-            data: localToDoc(item)
-        };
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents';
-        var res = await this.req('POST', url, body);
-        return docToLocal(res);
-    },
+   create: async function(item) {
+    // Generate a valid 20-character unique string ID for Appwrite REST
+    var generatedId = 'doc_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
 
-    update: async function(id, data) {
-        var body = { data: {} };
-        if (data.name !== undefined) body.data.name = data.name;
-        if (data.url !== undefined) body.data.url = data.url;
-        if (data.expanded !== undefined) body.data.expanded = data.expanded;
-        if (data.order !== undefined) body.data.order = data.order;
-        if (data.type !== undefined) body.data.type = data.type;
-        if (data.parentId !== undefined) {
-            body.data.parentId = data.parentId === null ? '' : data.parentId;
-        }
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents/' + id;
-        var res = await this.req('PATCH', url, body);
-        return docToLocal(res);
-    },
+    var docData = localToDoc(item);
+    
+    // Explicitly attach current logged-in user ID if required by your collection schema
+    if (Auth.user && Auth.user.$id) {
+        docData.userId = Auth.user.$id;
+    }
 
-    deleteDoc: async function(id) {
-        var url = '/databases/' + AW.DATABASE_ID
-                + '/collections/' + AW.COLLECTION_ID
-                + '/documents/' + id;
-        await this.req('DELETE', url);
-    },
+    var body = {
+        documentId: generatedId,
+        data: docData
+    };
+
+    var url = '/databases/' + AW.DATABASE_ID
+            + '/collections/' + AW.COLLECTION_ID
+            + '/documents';
+
+    var res = await this.req('POST', url, body);
+    return docToLocal(res);
+},
 
     batchUpdate: async function(updates) {
         // Appwrite has no native batch endpoint; run in parallel chunks
