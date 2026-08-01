@@ -2,10 +2,10 @@
 // APPWRITE CONFIG (UPDATED)
 // ============================================================
 var AW = {
-    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',       // Added "sfo." prefix
-    PROJECT_ID: 'sfo-6a6dd3c900350363b8e7',             // Added "sfo-" prefix
+    ENDPOINT: 'https://sfo.cloud.appwrite.io/v1',
+    PROJECT_ID: '6a6dd3c900350363b8e7', // Removed "sfo-" prefix
     DATABASE_ID: '6a6dd4fb001f662f0f79',
-    COLLECTION_ID: 'bookmarks'                          // "bookmarks" collection
+    COLLECTION_ID: 'bookmarks'
 };
 
 // ============================================================
